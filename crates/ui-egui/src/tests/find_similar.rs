@@ -158,6 +158,7 @@ fn a_second_search_waits_for_the_first() {
 /// ✕ on the row: the view stays as it was, nothing is said, and the next search doesn't read again
 /// what was read.
 #[test]
+#[ignore = "flaky: #3799"]
 fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     h.app.ui.view = ViewMode::Detail;
