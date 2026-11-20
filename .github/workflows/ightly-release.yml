@@ -1,0 +1,81 @@
+name: Nightly Release Build
+
+on:
+  schedule:
+    # Tous les jours à 02:00 UTC (ajuste selon ton fuseau horaire)
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Permet aussi un lancement manuel depuis l'onglet Actions
+
+permissions:
+  contents: write
+
+jobs:
+  nightly-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (origin)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git & remotes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/storytold/lightcraft.git
+          git fetch upstream main --tags
+          git fetch origin --prune
+
+      - name: Determine release number and auto-increment counter
+        id: branch_info
+        run: |
+          # Récupère le dernier tag de release (ex: v0.21.1 -> 0.21.1, ou fallback sur Cargo.toml)
+          LATEST_TAG=$(git describe --tags --abbrev=0 upstream/main 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            RELEASE_NUM="${LATEST_TAG#v}"
+          else
+            RELEASE_NUM=$(grep -m1 '^version\s*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          fi
+
+          PREFIX="rel/${RELEASE_NUM}-bd."
+          # Cherche le plus grand entier déjà utilisé sur origin pour ce préfixe
+          MAX_NUM=$(git ls-remote --heads origin "refs/heads/${PREFIX}*" \
+            | sed -E "s|.*refs/heads/${PREFIX}([0-9]+)|\1|" \
+            | sort -n \
+            | tail -n 1)
+
+          if [ -z "$MAX_NUM" ]; then
+            NEXT_NUM=1
+          else
+            NEXT_NUM=$((MAX_NUM + 1))
+          fi
+
+          BRANCH_NAME="${PREFIX}${NEXT_NUM}"
+          echo "release_num=${RELEASE_NUM}" >> "$GITHUB_OUTPUT"
+          echo "branch_name=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Création de la branche : ${BRANCH_NAME}"
+
+      - name: Create branch from upstream/main and merge feature branches
+        run: |
+          BRANCH_NAME="${{ steps.branch_info.outputs.branch_name }}"
+          git checkout -B "$BRANCH_NAME" upstream/main
+
+          BRANCHES="export-album-var lrc-map orf-clean2 status-box-move"
+          for br in $BRANCHES; do
+            echo "Fusion de origin/${br} dans ${BRANCH_NAME}..."
+            git merge --no-ff --no-edit "origin/${br}"
+          done
+
+      - name: Push release branch to origin
+        run: |
+          git push -u origin "${{ steps.branch_info.outputs.branch_name }}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Full release build (HEIC/HEIF support only)
+        run: |
+          cargo build --workspace --release --features lightcraft-codecs/heif
