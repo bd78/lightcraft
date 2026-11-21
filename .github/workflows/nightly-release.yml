@@ -151,6 +151,7 @@ jobs:
           name: lightcraft-${{ steps.version.outputs.version }}-windows-x64
           path: lightcraft-${{ steps.version.outputs.version }}-windows-x64.zip
           retention-days: 14
+          compression-level: 0   # already a zip: don't compress it a second time
 
       # Pushed only after a green build, so the branch never holds a merge that doesn't compile.
       # The version change is not committed (it was never staged).
