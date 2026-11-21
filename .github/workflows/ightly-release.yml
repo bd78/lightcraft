@@ -2,73 +2,120 @@ name: Nightly Release Build
 
 on:
   schedule:
-    # Tous les jours à 02:00 UTC (ajuste selon ton fuseau horaire)
-    - cron: '0 2 * * *'
-  workflow_dispatch: # Permet aussi un lancement manuel depuis l'onglet Actions
+    - cron: '0 2 * * *'   # every day at 02:00 UTC
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write          # pushes rel/integration back to the fork
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+env:
+  INTEGRATION_BRANCH: rel/integration
+  FEATURE_BRANCHES: export-album-var lrc-map orf-clean2 status-box-move
+  # Same craft-fonts revision as the official release.yml (Chinese/Japanese glyphs).
+  CRAFT_FONTS_REF: b076417b5880bd4154bd22f00695b1d28c6bea83
 
 jobs:
   nightly-build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - name: Checkout fork (origin)
+      # rel/integration already holds every conflict resolved so far, so those are never hit again;
+      # each night only merges what is new on upstream/main and on the feature branches.
+      - name: Checkout integration branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.INTEGRATION_BRANCH }}
           fetch-depth: 0
 
-      - name: Configure Git & remotes
+      - name: Configure Git and remotes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/storytold/lightcraft.git
-          git fetch upstream main --tags
+          git fetch upstream main
           git fetch origin --prune
 
-      - name: Determine release number and auto-increment counter
-        id: branch_info
+      # Only two kinds of conflict are resolved automatically, both "both branches appended at the
+      # same place": locale JSON files (keep both key blocks, add the comma, check the JSON parses)
+      # and docs Markdown (keep both sides' rows). Anything else (code, Cargo.toml) stops the run:
+      # resolve it once locally on rel/integration and push; later nights reuse that resolution.
+      - name: Merge upstream/main and feature branches
         run: |
-          # Récupère le dernier tag de release (ex: v0.21.1 -> 0.21.1, ou fallback sur Cargo.toml)
-          LATEST_TAG=$(git describe --tags --abbrev=0 upstream/main 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ]; then
-            RELEASE_NUM="${LATEST_TAG#v}"
-          else
-            RELEASE_NUM=$(grep -m1 '^version\s*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          fi
+          function Resolve-Known([string] $Path) {
+            $mode = if ($Path -like 'crates/ui-egui/locales/*.json') { 'json' } elseif ($Path -like 'docs/*.md') { 'both' } else { return $false }
+            # .NET resolves relative paths against the process directory, not PowerShell's location
+            $Full = Join-Path (Get-Location).Path $Path
+            $out = [System.Collections.Generic.List[string]]::new()
+            $state = 'none'; $ours = @(); $theirs = @()
+            foreach ($l in [IO.File]::ReadAllLines($Full)) {
+              if ($l -like '<<<<<<< *') { $state = 'ours'; $ours = @(); $theirs = @(); continue }
+              if ($state -eq 'ours' -and $l -like '||||||| *') { $state = 'base'; continue }
+              if ($state -in 'ours', 'base' -and $l -eq '=======') { $state = 'theirs'; continue }
+              if ($state -eq 'theirs' -and $l -like '>>>>>>> *') {
+                if ($mode -eq 'json' -and $ours.Count -gt 0 -and $theirs.Count -gt 0) { $ours[-1] = $ours[-1].TrimEnd().TrimEnd(',') + ',' }
+                $ours | ForEach-Object { $out.Add($_) }; $theirs | ForEach-Object { $out.Add($_) }
+                $state = 'none'; continue
+              }
+              switch ($state) { 'ours' { $ours += $l } 'base' { } 'theirs' { $theirs += $l } default { $out.Add($l) } }
+            }
+            if ($state -ne 'none') { return $false }
+            [IO.File]::WriteAllText($Full, (($out -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+            if ($mode -eq 'json') {
+              try { $null = Get-Content -Raw $Full | ConvertFrom-Json -AsHashtable -ErrorAction Stop } catch { Write-Host "::error file=$Path::not valid JSON after resolving: $($_.Exception.Message)"; return $false }
+            }
+            return $true
+          }
 
-          PREFIX="rel/${RELEASE_NUM}-bd."
-          # Cherche le plus grand entier déjà utilisé sur origin pour ce préfixe
-          MAX_NUM=$(git ls-remote --heads origin "refs/heads/${PREFIX}*" \
-            | sed -E "s|.*refs/heads/${PREFIX}([0-9]+)|\1|" \
-            | sort -n \
-            | tail -n 1)
+          function Merge-Ref([string] $Ref) {
+            Write-Host "::group::merge $Ref"
+            git merge --no-ff --no-edit $Ref
+            $ok = $LASTEXITCODE -eq 0
+            if (-not $ok) {
+              $conflicted = @(git diff --name-only --diff-filter=U)
+              if ($conflicted.Count -eq 0) { Write-Host "::endgroup::"; throw "git merge $Ref failed without a conflict (see the log above)" }
+              $left = @()
+              foreach ($f in $conflicted) {
+                if (Resolve-Known $f) { git add -- $f; Write-Host "resolved automatically: $f" } else { $left += $f }
+              }
+              if ($left.Count -gt 0) {
+                foreach ($f in $left) { Write-Host "::error file=$f::merge conflict merging $Ref needs a manual resolution" }
+                git merge --abort
+                Write-Host "::endgroup::"
+                throw "Merging $Ref left conflicts in: $($left -join ', '). Resolve them once on $env:INTEGRATION_BRANCH locally and push."
+              }
+              git commit --no-edit
+              if ($LASTEXITCODE -ne 0) { throw "commit of the merge of $Ref failed" }
+            }
+            Write-Host "::endgroup::"
+          }
 
-          if [ -z "$MAX_NUM" ]; then
-            NEXT_NUM=1
-          else
-            NEXT_NUM=$((MAX_NUM + 1))
-          fi
+          Merge-Ref 'upstream/main'
+          foreach ($b in $env:FEATURE_BRANCHES -split '\s+') { Merge-Ref "origin/$b" }
+          git log --oneline -8
 
-          BRANCH_NAME="${PREFIX}${NEXT_NUM}"
-          echo "release_num=${RELEASE_NUM}" >> "$GITHUB_OUTPUT"
-          echo "branch_name=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
-          echo "Création de la branche : ${BRANCH_NAME}"
-
-      - name: Create branch from upstream/main and merge feature branches
+      # Version: next patch after upstream's, plus -bd.<date>, e.g. 0.21.2-bd.20261121. A prerelease
+      # of the next patch sorts above upstream's release. Not committed: only this build carries it.
+      - name: Compute version
+        id: version
         run: |
-          BRANCH_NAME="${{ steps.branch_info.outputs.branch_name }}"
-          git checkout -B "$BRANCH_NAME" upstream/main
+          $up = (git show upstream/main:Cargo.toml | Select-String -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $core = ($up -split '-')[0]; $p = $core -split '\.'
+          $version = "$($p[0]).$($p[1]).$([int]$p[2] + 1)-bd.$(Get-Date -AsUTC -Format yyyyMMdd)"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building $version (upstream is $up)"
 
-          BRANCHES="export-album-var lrc-map orf-clean2 status-box-move"
-          for br in $BRANCHES; do
-            echo "Fusion de origin/${br} dans ${BRANCH_NAME}..."
-            git merge --no-ff --no-edit "origin/${br}"
-          done
-
-      - name: Push release branch to origin
-        run: |
-          git push -u origin "${{ steps.branch_info.outputs.branch_name }}"
+      - name: Checkout craft-fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -76,6 +123,36 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Full release build (HEIC/HEIF support only)
+      - name: Set version
+        run: cargo xtask version set ${{ steps.version.outputs.version }}
+
+      # The desktop app and the CLI only (not the whole workspace), with HEIC/HEIF, as
+      # packaging/windows/package.ps1 builds them.
+      - name: Release build (Windows x64, HEIC/HEIF)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}\craft-fonts
+          CRAFT_FONTS_REQUIRED: '1'
+        run: cargo build --release -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif
+
+      - name: Smoke test
+        run: target\release\lightcraft-cli.exe --version
+
+      - name: Package
         run: |
-          cargo build --workspace --release --features lightcraft-codecs/heif
+          $dir = "lightcraft-${{ steps.version.outputs.version }}-windows-x64"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target\release\lightcraft.exe, target\release\lightcraft-cli.exe $dir
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE $dir -ErrorAction SilentlyContinue
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightcraft-${{ steps.version.outputs.version }}-windows-x64
+          path: lightcraft-${{ steps.version.outputs.version }}-windows-x64.zip
+          retention-days: 14
+
+      # Pushed only after a green build, so the branch never holds a merge that doesn't compile.
+      # The version change is not committed (it was never staged).
+      - name: Push integration branch
+        run: git push origin "HEAD:$env:INTEGRATION_BRANCH"
