@@ -38,6 +38,20 @@ use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_men
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
+/// What the Profile field shows for photo `id` developed with `d`: the profile's name, and the note after it (the
+/// camera a camera profile was made for). (EXPERIMENTAL) A raw left on Color, the look that changes nothing, and given
+/// a camera profile automatically shows that profile, said to be automatic.
+pub(crate) fn profile_shown(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings) -> (String, Option<String>) {
+    let title = lightcraft_engine::dcp_folders::camera_title;
+    let auto = if d.profile.id == "lc.color" { app.session.catalog.photo(id).and_then(|p| app.session.media.auto_camera_profile(p)) } else { None };
+    if let Some(e) = auto {
+        return (e.name.clone(), Some(crate::i18n::tr_format!("{camera} (automatic)", camera = title(&e.camera_model))));
+    }
+    let name = app.session.profile_info(&d.profile.id).map(|(name, _)| name).unwrap_or("Color");
+    // a camera profile says which camera it was made for (many cameras have a profile of the same name)
+    (crate::i18n::profile_label(&d.profile.id, name).to_string(), app.session.profile_camera(&d.profile.id).map(title))
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
@@ -112,11 +126,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 14, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Profile")).font(t.font(13.0)).color(t.text_dim));
-            let name = app.session.profile_info(&d.profile.id).map(|(name, _)| name).unwrap_or("Color");
             // a long name is cut short before Browse Profiles: a wider row would widen the whole panel's
             // content, and the sliders below would run past its edge
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
-            let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
+            let (label, note) = profile_shown(app, id, &d);
+            let note = note.as_deref().map(|c| (c, t.text_dim));
+            let r = crate::widgets::dropdown_noted(ui, "profile", &label, note, t.font(15.0), t.text_label, max);
             let below = r.rect.bottom();
             egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -139,6 +154,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if d.profile.id != "lc.color" {
         control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);
+    }
+    // (EXPERIMENTAL) a look on a raw given a camera profile automatically: the camera profile under the look, said so
+    // (on Color, the look that changes nothing, the field itself names it)
+    if d.profile.id != "lc.color"
+        && !lightcraft_engine::cmd::dcp_profiles::is_dcp_id(&d.profile.id)
+        && let Some(p) = app.session.catalog.photo(id)
+        && let Some(e) = app.session.media.auto_camera_profile(p)
+    {
+        let text = crate::i18n::tr_format!(
+            "Camera profile: {name} · {camera} (automatic)",
+            name = e.name,
+            camera = lightcraft_engine::dcp_folders::camera_title(&e.camera_model)
+        );
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 8 }).show(ui, |ui| {
+            let r = ui.label(egui::RichText::new(text).size(11.5).color(t.text_dim));
+            crate::widgets::register(ui, "text:autoCameraProfile", r.rect);
+        });
     }
     // a raw carrying its own local tone mapping (Apple ProRAW's gain table map): off renders it as
     // Lightroom Classic does, on as the camera does

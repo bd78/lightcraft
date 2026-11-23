@@ -1051,17 +1051,29 @@ pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Co
 /// [`dropdown`] at most `max` wide, chevron included: a longer `text` is cut short with …, and
 /// shown in full on hover.
 pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, max: f32) -> Response {
+    dropdown_noted(ui, id, text, None, font, color, max)
+}
+
+/// [`dropdown_within`] with a note after `text`, in the note's own colour (what qualifies the choice: the camera a
+/// camera profile was made for). The two are one line, cut short together (the note first); screen readers and the
+/// hover of a line cut short get both in full ("text · note").
+pub fn dropdown_noted(ui: &mut Ui, id: &str, text: &str, note: Option<(&str, Color32)>, font: egui::FontId, color: Color32, max: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = one_line(ui.painter(), text, font, color, max - 20.0);
+    let note = note.filter(|(n, _)| !n.trim().is_empty());
+    let galley = one_line_noted(ui.painter(), text, note, font, color, max - 20.0);
+    let full = match note {
+        Some((n, _)) => format!("{text} · {n}"),
+        None => text.to_string(),
+    };
     let elided = galley.elided;
     let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &full));
     register(ui, format!("dropdown:{id}"), r);
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
-    if elided { resp.on_hover_text(text) } else { resp }
+    if elided { resp.on_hover_text(full) } else { resp }
 }
 
 #[cfg(test)]
@@ -1243,6 +1255,35 @@ mod access_tests {
         assert!(has("Button", "Auto"), "{found:?}");
         assert!(has("Button", "Delete mask"), "{found:?}");
     }
+
+    /// A dropdown with a note (the camera of a camera profile) is named with both, also when the line is cut short.
+    #[test]
+    fn a_noted_dropdown_is_named_with_its_note_even_cut_short() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut found = Vec::new();
+        let mut cut = None;
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let font = egui::FontId::proportional(15.0);
+                let _ = dropdown_noted(ui, "wide", "Neutral", Some(("Sony ILCE-7M4", Color32::GRAY)), font.clone(), Color32::WHITE, 600.0);
+                let narrow = dropdown_noted(ui, "narrow", "Neutral", Some(("Sony ILCE-7M4", Color32::GRAY)), font, Color32::WHITE, 90.0);
+                cut = Some(narrow.rect.width());
+            });
+            out.textures_delta.clear();
+            if let Some(update) = out.platform_output.accesskit_update.take() {
+                found = update
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.role() == egui::accesskit::Role::ComboBox)
+                    .map(|(_, n)| n.label().unwrap_or_default().to_string())
+                    .collect();
+            }
+        }
+        assert_eq!(found.iter().filter(|l| *l == "Neutral · Sony ILCE-7M4").count(), 2, "{found:?}");
+        assert!(cut.is_some_and(|w| w <= 90.0), "the narrow one stays inside its room: {cut:?}");
+    }
 }
 
 /// Names a widget for screen readers (`name` replaces what egui gave it): for a plain egui field
@@ -1321,7 +1362,22 @@ pub(crate) fn named(r: egui::Response, name: &str) -> egui::Response {
 /// `elided` says whether it was): for text painted into a fixed box (a tile, a row before its
 /// buttons), which a plain `Painter::text` would draw past.
 pub(crate) fn one_line(painter: &egui::Painter, text: &str, font: egui::FontId, color: Color32, max: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    one_line_noted(painter, text, None, font, color, max)
+}
+
+/// [`one_line`] with a note after `text` (" · note", in the note's colour), cut short with it.
+pub(crate) fn one_line_noted(
+    painter: &egui::Painter,
+    text: &str,
+    note: Option<(&str, Color32)>,
+    font: egui::FontId,
+    color: Color32,
+    max: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font.clone(), color);
+    if let Some((note, note_color)) = note.filter(|(n, _)| !n.trim().is_empty()) {
+        job.append(&format!(" · {note}"), 0.0, egui::TextFormat::simple(font, note_color));
+    }
     job.wrap = egui::text::TextWrapping::truncate_at_width(max.max(1.0));
     painter.layout_job(job)
 }

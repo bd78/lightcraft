@@ -5238,3 +5238,134 @@ fn export_sizes_keep_the_pixels_typed() {
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
 }
+
+/// Settings ▸ Profiles (EXPERIMENTAL): a folder of camera profiles is imported, one is deleted, a folder added to the
+/// camera profile folders is read at once, and the default profile's name typed in its field is saved. Profiles are
+/// synthetic, in a temporary folder.
+#[test]
+fn settings_profiles_tab_imports_a_folder_deletes_adds_a_profile_folder_and_names_the_default() {
+    use crate::state::Dialog;
+    use lightcraft_raw::dcp::{DcpProfile, write_dcp};
+    let dir = std::env::temp_dir().join(format!("lc-settings-profiles-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("nested")).unwrap();
+    for (i, (file, name)) in [("A.dcp", "Test A"), ("nested/B.dcp", "Test B")].iter().enumerate() {
+        let m = lightcraft_raw::Mat3([[0.9 + i as f64 * 0.1, -0.2, 0.0], [-0.3, 1.2, 0.1], [0.0, -0.2, 0.9]]);
+        let color = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(m), None], ..Default::default() };
+        let bytes = write_dcp(&DcpProfile { name: (*name).into(), camera_model: "Test Camera".into(), color }).unwrap();
+        std::fs::write(dir.join(file), bytes).unwrap();
+    }
+    let mut h = demo([1300.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let folder = dir.to_string_lossy().to_string();
+    h.app.services.pick_folder = Some(Box::new(move || Some(folder.clone())));
+    h.app.ui.dialog = Some(Dialog::Settings { tab: "profiles".into() });
+    for _ in 0..3 {
+        h.step();
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "button:importCameraProfileFolder"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.dcp_profiles.len(), 2, "both profiles of the folder, the nested one too");
+    for _ in 0..3 {
+        h.step();
+    }
+    // tick one row of the grid and delete the selection: that one goes, and the file it came from stays
+    let id = h.app.session.dcp_profiles[0].id.clone();
+    for widget in [format!("check:cameraProfile:{id}"), "button:deleteSelectedCameraProfiles".to_string()] {
+        let r = h.request("ui.clickWidget", json!({"id": widget}), t);
+        assert_eq!(r["ok"], true, "{widget}: {r}");
+        h.step();
+    }
+    assert!(h.app.session.dcp_profiles.iter().all(|p| p.id != id));
+    assert_eq!(h.app.session.dcp_profiles.len(), 1);
+    assert!(dir.join("A.dcp").is_file() && dir.join("nested").join("B.dcp").is_file(), "the imported files stay");
+    // select all ticks every row the filters show
+    let r = h.request("ui.clickWidget", json!({"id": "check:cameraProfileSelectAll"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.widgets", json!({}), t);
+    assert!(r.to_string().contains("button:deleteSelectedCameraProfiles"), "{r}");
+    // a folder added to the camera profile folders: every profile in it is read (waited for here)
+    assert!(h.app.session.media.dcp_folders.snapshot.index.entries.is_empty());
+    let r = h.request("ui.clickWidget", json!({"id": "button:addProfileFolder"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.session.media.dcp_folders.wait();
+    assert_eq!(h.app.session.media.dcp_folders.settings.folders, vec![dir.to_string_lossy().to_string()]);
+    assert_eq!(h.app.session.media.dcp_folders.snapshot.index.entries.len(), 2, "the folder's profiles, the nested one too");
+    for _ in 0..3 {
+        h.step();
+    }
+    // the folder's profiles are in the grid beside the imported one; deleting one of them hides it, its file stays
+    let folder_id = h.app.session.media.dcp_folders.snapshot.index.entries[0].id();
+    for widget in [format!("check:cameraProfile:{folder_id}"), "button:deleteSelectedCameraProfiles".to_string()] {
+        let r = h.request("ui.clickWidget", json!({"id": widget}), t);
+        assert_eq!(r["ok"], true, "{widget}: {r}");
+        h.step();
+    }
+    assert_eq!(h.app.session.media.dcp_folders.snapshot.hidden_count(), 1);
+    assert!(dir.join("A.dcp").is_file() && dir.join("nested").join("B.dcp").is_file(), "the folder's files stay");
+    let r = h.request("ui.clickWidget", json!({"id": "button:showHiddenCameraProfiles"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.media.dcp_folders.snapshot.hidden_count(), 0, "shown again");
+    // the default profile's name is saved when its edit ends
+    assert!(h.app.session.media.dcp_folders.settings.default_name.is_empty());
+    for (method, params) in
+        [("ui.clickWidget", json!({"id": "field:defaultCameraProfile"})), ("ui.text", json!({"text": "Test B"})), ("ui.key", json!({"key": "Enter"}))]
+    {
+        let r = h.request(method, params, t);
+        assert_eq!(r["ok"], true, "{method}: {r}");
+    }
+    assert_eq!(h.app.session.media.dcp_folders.settings.default_name, "Test B");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (EXPERIMENTAL) A raw left on Color and given a camera profile automatically names that profile in its Profile field,
+/// said to be automatic, though its Exif writes the model in one piece where the profile spaces it; a look chosen over
+/// it, or the automatic choice turned off, shows the look again. Profiles are synthetic, in a temporary folder.
+#[test]
+fn the_profile_field_names_the_camera_profile_a_raw_gets_automatically() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    use lightcraft_raw::dcp::{DcpProfile, write_dcp};
+    let dir = std::env::temp_dir().join(format!("lc-ui-auto-camera-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (i, name) in ["Soft Muted", "Everyday"].iter().enumerate() {
+        let m = lightcraft_raw::Mat3([[0.9 + i as f64 * 0.1, -0.2, 0.0], [-0.3, 1.2, 0.1], [0.0, -0.2, 0.9]]);
+        let color = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(m), None], ..Default::default() };
+        let bytes = write_dcp(&DcpProfile { name: (*name).into(), camera_model: "Olympus E-M5 Mark II".into(), color }).unwrap();
+        std::fs::write(dir.join(format!("{i}.dcp")), bytes).unwrap();
+    }
+    let mut h = demo([1300.0, 900.0]);
+    let mut folders = lightcraft_engine::dcp_folders::DcpFolders::new(vec![dir.clone()], None);
+    folders.settings.default_name = "Muted".into();
+    folders.rescan_now(false);
+    h.app.session.media.dcp_folders = folders;
+    // a raw of that camera on Color (its file need not exist: nothing here reads it)
+    let id = PhotoId(h.app.session.catalog.photos().map(|p| p.id.0).max().unwrap_or(0) + 1);
+    let path = dir.join("P1.ORF").to_string_lossy().into_owned();
+    let mut raw = Photo::new(id, Source::File { path }, "P1.ORF", "ORF", 4608, 3456, "2026-11-01T00:00:00");
+    raw.kind = MediaKind::Raw;
+    raw.meta.camera = "OLYMPUS IMAGING CORP. E-M5MarkII".into();
+    h.app.session.commit("setup", Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let on_color = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
+    assert_eq!(on_color.profile.id, "lc.color");
+    let shown = |h: &Headless, d: &lightcraft_develop::DevelopSettings| crate::panels::edit::profile_shown(&h.app, id, d);
+    let (name, note) = shown(&h, &on_color);
+    assert_eq!(name, "Soft Muted", "the camera's profile of the name listed");
+    // the same profile chosen by hand is named with its camera alone; chosen automatically, the field says so too
+    let mut chosen = on_color.clone();
+    chosen.profile.id = h.app.session.media.dcp_folders.snapshot.index.entries.iter().find(|e| e.name == name).unwrap().id();
+    let (chosen_name, chosen_note) = shown(&h, &chosen);
+    let (note, chosen_note) = (note.unwrap_or_default(), chosen_note.unwrap_or_default());
+    assert_eq!(chosen_name, name);
+    assert!(!chosen_note.is_empty() && note.starts_with(&chosen_note) && note.len() > chosen_note.len(), "{note:?} / {chosen_note:?}");
+    // a look over it is the look
+    let mut look = on_color.clone();
+    look.profile.id = "lc.vivid".into();
+    assert_ne!(shown(&h, &look).0, name);
+    // and with the automatic choice off, Color is Color
+    h.app.session.execute("profiles.setAutomaticCameraProfile", &json!({"on": false})).unwrap();
+    assert_ne!(shown(&h, &on_color).0, name);
+    let _ = std::fs::remove_dir_all(&dir);
+}

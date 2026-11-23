@@ -220,7 +220,24 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.lut_profiles.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": favorite(&p.id), "imported": true}));
             Ok(Value::Array(builtin.chain(imported).collect()))
         }),
-        cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),
+        cmd!(
+            query "profiles.menu",
+            "Profile Menu",
+            [],
+            None,
+            "{id?: photo id} — favourites, recent (newest first) and groups; with a raw photo, also its camera's profiles from the camera profile folders",
+            always,
+            |s, p| {
+                s.poll_camera_profile_folders();
+                let camera = p
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .and_then(|id| s.catalog.photo(lightcraft_catalog::PhotoId(id)))
+                    .filter(|p| p.develops_raw())
+                    .map(|p| p.meta.camera.clone());
+                Ok(s.profile_menu_for(camera.as_deref()))
+            }
+        ),
         cmd!(query "history.list", "List History", [], None, "{id?} — returns {history: labels oldest first, cursor: index of the step the settings are at (later steps can be returned to), versions}", has_active, |s, p| {
             let id = photo_arg(s, p, "history.list")?;
             let ph = s.catalog.photo(id).ok_or_else(|| bad("history.list", "no such photo"))?;

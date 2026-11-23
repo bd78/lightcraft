@@ -85,6 +85,9 @@ pub struct MediaCache {
     pub denoise: DenoiseIndex,
     /// Imported camera profiles by id ([`crate::cmd::dcp_profiles`]), handed to the decoder of photos using them.
     pub camera_profiles: std::collections::HashMap<String, LoadedCameraProfile>,
+    /// Camera profiles in the camera profile folders ([`crate::dcp_folders`]): chosen like imported ones, and a raw's
+    /// camera's profile of the default name when none is chosen.
+    pub dcp_folders: crate::dcp_folders::DcpFolders,
 }
 
 /// An imported camera profile ready for the decoder, with a fingerprint of its file: decoded sources and cached renders

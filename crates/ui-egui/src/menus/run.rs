@@ -1502,6 +1502,9 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             }
         }
         "file.importPresets" => file_import_presets_command(app, ctx, id, p),
+        "file.importCameraProfiles" => crate::dialogs::settings::import_camera_profiles_command(app, ctx, id, p, false),
+        "file.importCameraProfileFolder" => crate::dialogs::settings::import_camera_profiles_command(app, ctx, id, p, true),
+        "file.addCameraProfileFolder" => crate::dialogs::settings::add_camera_profile_folder_command(app, id, p),
         "file.importKeywords" => file_import_keywords_command(app, ctx, id, p),
         "file.exportKeywords" => file_export_keywords_command(app, ctx, id, p),
         "dialog.saveMaskEffect" => {

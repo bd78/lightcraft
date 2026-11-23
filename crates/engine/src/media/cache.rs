@@ -72,6 +72,7 @@ impl Default for MediaCache {
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
             camera_profiles: HashMap::new(),
+            dcp_folders: Default::default(),
         }
     }
 }
@@ -398,23 +399,52 @@ impl MediaCache {
         r
     }
 
-    /// The imported camera profile photo `p` develops with, when its profile setting names one this library has: what a
-    /// source decoded with it is tagged with (its id and the file's fingerprint), and the profile.
+    /// The camera profile photo `p` develops with, when there is one: what a source decoded with it is tagged with (its
+    /// id and the file's fingerprint), and the profile. It is the one its profile setting names (imported, or from a
+    /// camera profile folder), else — for a raw other than a DNG, which has its own — its camera's profile of the
+    /// default name the user set, from a camera profile folder ([`crate::dcp_folders`]).
     pub fn camera_profile_of(&self, p: &Photo) -> Option<(String, Arc<DcpProfile>)> {
-        let id = &p.develop.profile.id;
-        if !crate::cmd::dcp_profiles::is_dcp_id(id) {
-            return None;
-        }
-        self.camera_profiles.get(id).map(|d| (format!("{id}#{:016x}", d.fingerprint), d.profile.clone()))
+        self.resolve_camera_profile(p, &p.develop.profile.id).map(|(tag, d)| (tag, d.profile))
     }
 
-    /// What a render with profile `profile_id` adds to its cache keys: the imported camera profile's fingerprint, 0
-    /// for any other profile and for a camera profile this library no longer has (it renders without it).
-    pub fn camera_profile_salt(&self, profile_id: &str) -> u64 {
-        if !crate::cmd::dcp_profiles::is_dcp_id(profile_id) {
-            return 0;
+    /// [`Self::camera_profile_of`] with profile `profile_id` in place of `p`'s own.
+    fn resolve_camera_profile(&self, p: &Photo, profile_id: &str) -> Option<(String, super::LoadedCameraProfile)> {
+        if crate::cmd::dcp_profiles::is_dcp_id(profile_id) {
+            let d = match self.camera_profiles.get(profile_id) {
+                Some(d) => d.clone(),
+                None => self.dcp_folders.load(self.dcp_folders.snapshot.by_id(profile_id)?)?,
+            };
+            return Some((format!("{profile_id}#{:016x}", d.fingerprint), d));
         }
-        self.camera_profiles.get(profile_id).map_or(0, |d| d.fingerprint)
+        let entry = self.auto_camera_profile(p)?;
+        let d = self.dcp_folders.load(entry)?;
+        Some((format!("auto:{:016x}", d.fingerprint), d))
+    }
+
+    /// The camera profile folders' profile `p` develops with when no camera profile is chosen: one made for its
+    /// camera ([`crate::dcp_folders::Snapshot::default_for`], [`Self::camera_profile_of`]). None when that is turned
+    /// off ([`crate::dcp_folders::Settings::automatic`]), and for a DNG (it has its own colour model).
+    pub fn auto_camera_profile(&self, p: &Photo) -> Option<&crate::dcp_folders::Entry> {
+        let f = &self.dcp_folders;
+        if !f.settings.automatic || !p.develops_raw() || p.format.eq_ignore_ascii_case("DNG") {
+            return None;
+        }
+        f.snapshot.default_for(&p.meta.camera, &f.settings.default_name)
+    }
+
+    /// What a render of `p` with profile `profile_id` adds to its cache keys: the fingerprint of the camera profile it
+    /// develops with ([`Self::camera_profile_of`]), 0 for none (also for a camera profile this library no longer has:
+    /// it renders without it). Read from the index alone: no profile file is opened for a key.
+    pub fn camera_profile_salt(&self, p: &Photo, profile_id: &str) -> u64 {
+        if crate::cmd::dcp_profiles::is_dcp_id(profile_id) {
+            return self
+                .camera_profiles
+                .get(profile_id)
+                .map(|d| d.fingerprint)
+                .or_else(|| self.dcp_folders.snapshot.by_id(profile_id).map(|e| e.fingerprint))
+                .unwrap_or(0);
+        }
+        self.auto_camera_profile(p).map_or(0, |e| e.fingerprint)
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a

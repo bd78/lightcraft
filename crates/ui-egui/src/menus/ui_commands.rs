@@ -266,6 +266,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), ""),
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
+    // Settings ▸ Profiles: {paths?} / {path?} (asks when missing)
+    ("file.importCameraProfiles", "Import Camera Profiles…", None, ""),
+    ("file.importCameraProfileFolder", "Import Folder of Camera Profiles…", None, ""),
+    ("file.addCameraProfileFolder", "Add Camera Profile Folder…", None, ""),
     ("file.exportPresets", "Export Presets…", None, "File"),
     // Masking panel ▸ Effect menu
     ("dialog.saveMaskEffect", "Save Current Settings as New Effect Preset…", None, ""),

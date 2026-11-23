@@ -62,7 +62,7 @@ impl crate::Session {
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
-        let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
+        let profile_salt = self.media.camera_profile_salt(&p, &settings.profile.id);
         let lens = super::quick::lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
@@ -133,7 +133,7 @@ impl crate::Session {
         job.settings = Arc::new(settings.clone());
         // (the imported camera profile's file is in the key, as in `render_job`'s: a profile file replaced under the
         // same id is a new picture)
-        let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
+        let profile_salt = self.media.camera_profile_salt(&p, &settings.profile.id);
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         let decoder = super::quick::decoder_key(&p);
@@ -185,7 +185,7 @@ impl crate::Session {
         // decoded as these settings develop it (their camera profile, or none)
         p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
+        let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&p, &settings.profile.id));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -240,7 +240,7 @@ impl crate::Session {
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id));
+        let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&p, &settings.profile.id));
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
@@ -287,7 +287,7 @@ impl crate::Session {
     /// not shown as the denoised one.
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let salt = self.media.denoise_salt(p.id, &p.develop);
-        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let profile_salt = self.media.camera_profile_salt(p, &p.develop.profile.id);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
@@ -426,7 +426,7 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let profile_salt = self.media.camera_profile_salt(&p, &p.develop.profile.id);
         let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
         // (the photo too: a virtual copy shares the file and, unedited, the settings)
         let h = Hasher128::new()
