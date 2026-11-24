@@ -1,0 +1,45 @@
+name: Sync main with upstream
+
+# Keeps the fork's main a plain copy of storytold/lightcraft main. Runs before the
+# nightly release build (02:00), so that build starts from a fresh main.
+on:
+  schedule:
+    - cron: '0 1 * * *'   # every day at 01:00 Eastern time (EST/EDT)
+      timezone: 'America/Montreal'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main
+  cancel-in-progress: false
+
+jobs:
+  sync-main:
+    runs-on: ubuntu-latest
+    steps:
+      # GITHUB_TOKEN may not push commits that change .github/workflows/* (upstream does that
+      # regularly). A SYNC_TOKEN secret (a PAT with Contents and Workflows write on this fork)
+      # covers that case; without it the job still works for every other upstream change.
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Fast-forward origin/main to upstream/main
+        run: |
+          git remote add upstream https://github.com/storytold/lightcraft.git
+          git fetch upstream main
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse upstream/main)" ]; then
+            echo "main is already at upstream/main ($(git rev-parse --short HEAD))."; exit 0
+          fi
+          if ! git merge-base --is-ancestor HEAD upstream/main; then
+            echo "::error::origin/main has commits that upstream/main does not; not a fast-forward. Reset main by hand."
+            git log --oneline upstream/main..HEAD | head -20
+            exit 1
+          fi
+          echo "main $(git rev-parse --short HEAD) -> $(git rev-parse --short upstream/main) ($(git rev-list --count HEAD..upstream/main) commits)"
+          git push origin upstream/main:main   # no --force

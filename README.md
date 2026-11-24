@@ -11,3 +11,6 @@ from the default branch). It holds no LightCraft code.
 
 The workflow checks out `rel/integration`, merges `upstream/main` and the feature branches,
 builds the Windows release, uploads the zip, and pushes `rel/integration` after a green build.
+
+`sync-main.yml` fast-forwards the fork's `main` to upstream `main` every night at 01:00
+Eastern time, before the nightly build. It never force-pushes: if `main` has diverged it fails.
