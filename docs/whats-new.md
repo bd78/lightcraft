@@ -5,6 +5,15 @@
 ### Export subfolder variables
 - The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, UTC), and `{hour}` (batch export time in `HHMM`, UTC). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 
+### Heal meets its surroundings (process 14)
+- A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
+  longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
+  into it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
+  Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
+  pixels. Very large spots keep the previous heal. This is rendering process 14: new photos (and Reset) get it, photos
+  you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [process versions](process-versions.md).
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
