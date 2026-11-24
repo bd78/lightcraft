@@ -1,5 +1,5 @@
 //! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Map,
-//! Faces, AI Denoise.
+//! Profiles, Faces, AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -27,6 +27,7 @@ mod import;
 mod libraries;
 mod map;
 mod performance;
+mod profiles;
 mod slideshow;
 mod widgets;
 
@@ -39,6 +40,8 @@ pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
 use map::map_tab;
 use performance::performance_tab;
+use profiles::profiles_tab;
+pub(crate) use profiles::{add_camera_profile_folder_command, import_camera_profiles_command};
 use slideshow::slideshow_tab;
 pub(crate) use widgets::{check, choices, heading, hint, row};
 
@@ -56,6 +59,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("slideshow", "Slideshow"),
     ("map", "Map"),
+    ("profiles", "Profiles"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
 ];
@@ -75,6 +79,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "interface" => interface_tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "map" => map_tab(app, ui, &t),
+        "profiles" => profiles_tab(app, ui, &t),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
@@ -84,6 +89,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
 /// The widest the Settings window's content gets, and the tallest its pages get: the window is
 /// one size on every tab, so it stays where it is as the tabs are gone through.
 const PAGE_SIZE: egui::Vec2 = egui::vec2(560.0, 640.0);
+
+/// The gap between two tabs of the tab bar.
+const TAB_GAP: f32 = 4.0;
 
 /// The least room in which a page scrolls by itself. In a window with less (far below the
 /// desktop minimum), the tabs and the page scroll together in the dialog's own scroll area.
@@ -108,14 +116,17 @@ const PREVIEW_CHROME: f32 = 82.0;
 /// On Slideshow the slide preview is pinned between the tab bar and the page (where the room
 /// allows), and comes off that page's room.
 pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_height: f32) {
-    ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
+    // as wide as the tab bar on one line (in any language), at least the page's width, never wider than the app window
+    // leaves: there the tabs wrap
+    let tabs_w = TABS.iter().map(|(_, label)| crate::widgets::text_button_size(ui, label)).sum::<f32>() + TAB_GAP * (TABS.len() as f32 - 1.0);
+    ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x.max(tabs_w.ceil())));
     let top = ui.cursor().top();
     // The page drawn is the one that was open when the frame began: a tab clicked now opens on
     // the next frame, so a text box on the page being left is drawn once more and saves what was
     // typed in it (the click took the focus from it).
     let shown = tab.clone();
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        ui.spacing_mut().item_spacing = egui::vec2(TAB_GAP, 4.0);
         for (id, label) in TABS {
             if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id).clicked() {
                 *tab = id.to_string();

@@ -14,6 +14,7 @@ mod crop_angle;
 mod crop_aspect;
 mod dcp;
 mod dcp_corpus;
+mod dcp_folders;
 mod denoise;
 mod export;
 mod face_models;

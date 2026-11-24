@@ -68,6 +68,10 @@ USAGE:
                              --opt format=original (copy + XMP sidecar) --opt metadata=none
                              --opt addToPhotos=true --opt photosAlbum=NAME (macOS: then add
                              the file to Apple Photos, into that album)
+        --profile-folders (experimental) use the camera profiles of the camera profile folders (the
+                             per-user one, LIGHTCRAFT_DCP_DIRS and Settings ▸ Profiles): a raw with no
+                             camera profile chosen develops with its camera's of the default name set
+                             there; prints what the scan found
   lightcraft-cli snapshot [OPTIONS] [FILES/FOLDERS…]
       Run the full app UI headlessly (no window, no GPU: CPU-rasterized egui) and write PNGs.
       Options:
@@ -736,10 +740,13 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut size: Option<u64> = None;
     let mut quality = 92u8;
     let mut opts = serde_json::Map::new();
+    let mut profile_folders = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => output = Some(take_value(args, &mut i, "-o")?.to_string()),
+            // (EXPERIMENTAL) develop with the camera profiles of the camera profile folders
+            "--profile-folders" => profile_folders = true,
             "--set" => {
                 let kv = take_value(args, &mut i, "--set")?;
                 let (k, v) = kv.split_once('=').ok_or_else(|| format!("--set expects control=value, got `{kv}`"))?;
@@ -765,7 +772,11 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = file_session();
+    let mut s = if profile_folders { file_session().with_camera_profile_folders_now() } else { file_session() };
+    if profile_folders {
+        let r = s.execute("profiles.cameraFolders", &json!({})).map_err(|e| e.to_string())?;
+        eprintln!("camera profile folders: {} profiles for {} cameras, {} unreadable", r["profiles"], r["cameras"], r["failedCount"]);
+    }
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;

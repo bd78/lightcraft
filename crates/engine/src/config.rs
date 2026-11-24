@@ -194,6 +194,22 @@ impl Session {
         self
     }
 
+    /// Use the camera profiles in the camera profile folders ([`crate::dcp_folders`]): the per-user folder in the
+    /// config folder, `LIGHTCRAFT_DCP_DIRS` and the folders added in Settings, with the choices and the last index
+    /// kept in the config folder. The folders are walked again on a worker (the last index serves meanwhile).
+    pub fn with_camera_profile_folders(mut self) -> Self {
+        self.media.dcp_folders = camera_profile_folders();
+        self.media.dcp_folders.rescan(&self.activity, false);
+        self
+    }
+
+    /// [`Self::with_camera_profile_folders`] walking the folders before it returns (the CLI develops right after).
+    pub fn with_camera_profile_folders_now(mut self) -> Self {
+        self.media.dcp_folders = camera_profile_folders();
+        self.media.dcp_folders.rescan_now(false);
+        self
+    }
+
     /// Let the host offer the lens database at its start, and fetch it there once the user said yes
     /// ([`crate::lensfun_download::fetch_on_start`] decides). Separate from selecting a database that is already there ([`Self::with_default_lens_database`]).
     pub fn with_lens_auto_download(mut self) -> Self {
@@ -223,6 +239,14 @@ impl Session {
         self.denoise.models_dir = dir;
         self.denoise.touch();
     }
+}
+
+/// The camera profile folders a host with a file system looks in ([`Session::with_camera_profile_folders`]).
+fn camera_profile_folders() -> crate::dcp_folders::DcpFolders {
+    let config = config_dir();
+    let mut roots: Vec<PathBuf> = config.as_deref().map(crate::dcp_folders::user_folder).into_iter().collect();
+    roots.extend(crate::dcp_folders::env_roots());
+    crate::dcp_folders::DcpFolders::new(roots, config.as_deref())
 }
 
 #[cfg(test)]

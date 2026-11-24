@@ -572,7 +572,20 @@ impl Session {
         if let Some(p) = self.lut_profiles.iter().find(|p| p.id == id) {
             return Some((p.name.as_str(), p.group.as_str()));
         }
-        self.dcp_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), crate::cmd::dcp_profiles::DCP_GROUP))
+        if let Some(p) = self.dcp_profiles.iter().find(|p| p.id == id) {
+            return Some((p.name.as_str(), crate::cmd::dcp_profiles::DCP_GROUP));
+        }
+        self.media.dcp_folders.snapshot.by_id(id).map(|e| (e.name.as_str(), crate::dcp_folders::GROUP))
+    }
+
+    /// The camera a camera profile (imported, or of the camera profile folders) was made for, as the profile names it
+    /// (`UniqueCameraModel`); None for any other profile, or a camera profile that names none.
+    pub fn profile_camera(&self, id: &str) -> Option<&str> {
+        let camera = match self.dcp_profiles.iter().find(|p| p.id == id) {
+            Some(p) => p.camera_model.as_str(),
+            None => self.media.dcp_folders.snapshot.by_id(id)?.camera_model.as_str(),
+        };
+        Some(camera.trim()).filter(|c| !c.is_empty())
     }
 
     /// The imported profiles as (id, name, group): LUT profiles, then camera profiles (`.dcp`). A camera profile
@@ -597,6 +610,12 @@ impl Session {
 
     /// The profile menu: favourites, recent, then every group (`profiles.menu`).
     pub fn profile_menu(&self) -> Value {
+        self.profile_menu_for(None)
+    }
+
+    /// [`Self::profile_menu`] with, for a raw of a camera that has profiles in the camera profile folders, those
+    /// profiles as a group of their own, last (the one of the default name marked `default`).
+    pub fn profile_menu_for(&self, camera: Option<&str>) -> Value {
         let item =
             |p: &ProfileInfo| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.iter().any(|f| f == p.id)});
         let imported = self.imported_profiles();
@@ -607,7 +626,12 @@ impl Session {
             }
             v
         };
-        let lut_item = |id: &str| imported.iter().find(|p| p.0 == id).map(imported_item);
+        let folder_item = |id: &str| {
+            self.media.dcp_folders.snapshot.by_id(id).map(|e| {
+                json!({"id": id, "name": e.name, "group": crate::dcp_folders::GROUP, "favorite": self.profile_favorites.iter().any(|f| f == id), "imported": true, "folder": true, "cameraModel": e.camera_model})
+            })
+        };
+        let lut_item = |id: &str| imported.iter().find(|p| p.0 == id).map(imported_item).or_else(|| folder_item(id));
         let list = |ids: &[String]| ids.iter().filter_map(|id| profile(id).map(item).or_else(|| lut_item(id))).collect::<Vec<_>>();
         let mut groups: Vec<Value> = profile_groups()
             .into_iter()
@@ -625,6 +649,22 @@ impl Session {
         for g in lut_groups {
             let profiles: Vec<Value> = imported.iter().filter(|p| p.2 == g).map(imported_item).collect();
             groups.push(json!({"name": g, "profiles": profiles, "imported": true}));
+        }
+        if let Some(camera) = camera {
+            let f = &self.media.dcp_folders;
+            let default_id = f.snapshot.default_for(camera, &f.settings.default_name).map(crate::dcp_folders::Entry::id);
+            let profiles: Vec<Value> = crate::cmd::dcp_profiles::folder_profiles_for(self, camera)
+                .iter()
+                .filter_map(|(id, _, _)| {
+                    folder_item(id).map(|mut v| {
+                        v["default"] = json!(Some(id) == default_id.as_ref());
+                        v
+                    })
+                })
+                .collect();
+            if !profiles.is_empty() {
+                groups.push(json!({"name": crate::dcp_folders::GROUP, "profiles": profiles, "imported": true, "folder": true}));
+            }
         }
         json!({
             "favorites": list(&self.profile_favorites),

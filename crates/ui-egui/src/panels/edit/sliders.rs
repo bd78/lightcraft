@@ -124,7 +124,71 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
             lut_groups.push(g.clone());
         }
     }
+    // the active raw's camera: its camera profiles come first
+    let camera = app.session.active().and_then(|id| app.session.catalog.photo(id)).filter(|p| p.develops_raw()).map(|p| p.meta.camera.clone());
+    // the imported camera profiles and (EXPERIMENTAL) the camera profile folders' ones, of every camera
+    let by_brand = lightcraft_engine::cmd::dcp_profiles::all_by_brand(&app.session, camera.as_deref());
+    let dcp_group = lightcraft_engine::cmd::dcp_profiles::DCP_GROUP;
+    if !by_brand.is_empty() && !lut_groups.iter().any(|g| g == dcp_group) {
+        lut_groups.push(dcp_group.to_string());
+    }
     for g in &lut_groups {
+        // camera profiles: maker ▸ camera ▸ profiles (a library can hold a thousand of them), with the photo's camera
+        // on top so its profiles are one level away
+        if g == dcp_group {
+            let camera_menu = |ui: &mut egui::Ui,
+                               depth: usize,
+                               label: String,
+                               id: String,
+                               list: &[(String, String)],
+                               pick: &mut (Option<String>, Option<String>)| {
+                let r = crate::widgets::menu_button(ui, format!("{label}  ({})", list.len()), |ui| {
+                    crate::menu_level::level(ui, depth, Some(below), |ui| {
+                        ui.set_min_width(200.0);
+                        for (id, name) in list {
+                            item(ui, "camera", id, name, pick);
+                        }
+                    });
+                });
+                register(ui, id, r.response.rect);
+                if r.inner.is_some() {
+                    crate::menu_level::set_anchor(ui.ctx(), depth, r.response.rect);
+                }
+            };
+            let r = crate::widgets::menu_button(ui, crate::i18n::tr(g), |ui| {
+                crate::menu_level::level(ui, 2, Some(below), |ui| {
+                    ui.set_min_width(200.0);
+                    let photo_camera = by_brand.iter().flat_map(|b| &b.2).find(|c| c.1);
+                    if let Some((model, _, list)) = photo_camera {
+                        let label = crate::i18n::tr_format!("{camera} (this photo)", camera = model.clone());
+                        camera_menu(ui, 3, label, "profileMenu:cameraMenu:thisPhoto".into(), list, &mut pick);
+                        ui.separator();
+                    }
+                    for (brand, _, cameras) in &by_brand {
+                        let shown = if brand.is_empty() { crate::i18n::tr("Unknown camera").to_string() } else { brand.clone() };
+                        let r = crate::widgets::menu_button(ui, format!("{shown}  ({})", cameras.len()), |ui| {
+                            crate::menu_level::level(ui, 3, Some(below), |ui| {
+                                ui.set_min_width(200.0);
+                                for (model, _, list) in cameras {
+                                    let short = lightcraft_engine::dcp_folders::camera_brand(model).1;
+                                    let shown = if short.is_empty() { crate::i18n::tr("Unknown camera").to_string() } else { short };
+                                    camera_menu(ui, 4, shown, format!("profileMenu:cameraMenu:{model}"), list, &mut pick);
+                                }
+                            });
+                        });
+                        register(ui, format!("profileMenu:brandMenu:{brand}"), r.response.rect);
+                        if r.inner.is_some() {
+                            crate::menu_level::set_anchor(ui.ctx(), 3, r.response.rect);
+                        }
+                    }
+                });
+            });
+            register(ui, format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
+            if r.inner.is_some() {
+                crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+            }
+            continue;
+        }
         // a folder's name as it is, and its own widget id even when it matches a built-in group
         let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {

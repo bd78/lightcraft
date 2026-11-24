@@ -65,6 +65,14 @@ impl LightcraftApp {
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
         self.background_prep(ctx);
         panels::notices::logic(self, ctx);
+        // (EXPERIMENTAL) a scan of the camera profile folders that has finished: photos redraw with them (their
+        // render keys hold the profiles' fingerprints); an idle window still takes the scan's answer
+        if self.session.poll_camera_profile_folders() {
+            ctx.request_repaint();
+        }
+        if self.session.media.dcp_folders.scanning() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

@@ -33,10 +33,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     // the applied profile and its amount
     let (cr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-    let name = app.session.profile_info(&d.profile.id).map(|(name, _)| name).unwrap_or("Color");
     ui.painter().text(pos2(cr.left() + 24.0, cr.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Profile"), t.font(13.0), t.text_dim);
-    // a long name is cut short (with …) at the panel's edge
-    let g = one_line(ui.painter(), crate::i18n::profile_label(&d.profile.id, name), t.font(14.0), t.text_label, cr.width() - 84.0 - 24.0);
+    // a long name is cut short (with …) at the panel's edge; a camera profile says which camera it was made for
+    let (label, note) = super::edit::profile_shown(app, id, &d);
+    let g = crate::widgets::one_line_noted(
+        ui.painter(),
+        &label,
+        note.as_deref().map(|c| (c, t.text_dim)),
+        t.font(14.0),
+        t.text_label,
+        cr.width() - 84.0 - 24.0,
+    );
     ui.painter().galley(pos2(cr.left() + 84.0, cr.center().y - g.size().y / 2.0), g, t.text_label);
     if d.profile.id != "lc.color" {
         super::edit::control(app, ui, &d, "profile.amount", true);
@@ -70,9 +77,37 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             lut_groups.push(g.clone());
         }
     }
+    let camera = app.session.catalog.photo(id).filter(|p| p.develops_raw()).map(|p| p.meta.camera.clone());
+    let mut other_cameras = 0;
     for g in &lut_groups {
+        // camera profiles: only this photo's camera's (each one is a thumbnail rendered; a library can hold a
+        // thousand of them for other cameras, which the profile menu lists camera by camera)
+        if g == lightcraft_engine::cmd::dcp_profiles::DCP_GROUP {
+            let groups = lightcraft_engine::cmd::dcp_profiles::imported_by_camera(&app.session, camera.as_deref());
+            other_cameras = groups.iter().filter(|g| !g.1).map(|g| g.2.len()).sum::<usize>();
+            let mine: Vec<(String, String, String)> =
+                groups.into_iter().filter(|g| g.1).flat_map(|g| g.2).map(|(id, name)| (id, name, g.clone())).collect();
+            if !mine.is_empty() {
+                sections.push((g.as_str(), "", true, mine));
+            }
+            continue;
+        }
         let profiles = imported.iter().filter(|p| &p.2 == g).cloned().collect();
         sections.push((g.as_str(), "", true, profiles));
+    }
+    if other_cameras > 0 {
+        let note = crate::i18n::tr_format!("{n} camera profiles for other cameras: choose them from the profile menu", n = other_cameras);
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+            let r = ui.label(egui::RichText::new(note).size(11.5).color(t.text_dim));
+            register(ui, "profiles:otherCameras", r.rect);
+        });
+    }
+    // (EXPERIMENTAL) the camera profile folders' profiles for this raw's camera, the default one first
+    if let Some(camera) = camera {
+        let from_folders = lightcraft_engine::cmd::dcp_profiles::folder_profiles_for(&app.session, &camera);
+        if !from_folders.is_empty() {
+            sections.push((lightcraft_engine::dcp_folders::GROUP, "", true, from_folders));
+        }
     }
     for (title, tag, imported, list) in sections {
         // an imported folder named like a built-in group still opens and closes on its own
