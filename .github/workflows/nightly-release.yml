@@ -15,7 +15,7 @@ concurrency:
 
 env:
   INTEGRATION_BRANCH: rel/integration
-  FEATURE_BRANCHES: export-album-var lrc-map orf-clean2 status-box-move feat/edit-panel-camera-name
+  FEATURE_BRANCHES: export-album-var lrc-map orf-clean2 status-box-move feat/edit-panel-camera-name experiment/installed-adobe-dcp
   # Same craft-fonts revision as the official release.yml (Chinese/Japanese glyphs).
   CRAFT_FONTS_REF: b076417b5880bd4154bd22f00695b1d28c6bea83
 
