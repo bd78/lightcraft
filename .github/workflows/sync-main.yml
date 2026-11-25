@@ -4,7 +4,7 @@ name: Sync main with upstream
 # nightly release build (02:00), so that build starts from a fresh main.
 on:
   schedule:
-    - cron: '0 1 * * *'   # every day at 01:00 Eastern time (EST/EDT)
+    - cron: '8 1 * * *'   # every day at 01:00 Eastern time (EST/EDT)
       timezone: 'America/Montreal'
   workflow_dispatch:
 
