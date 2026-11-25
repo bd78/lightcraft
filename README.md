@@ -15,6 +15,17 @@ builds the Windows release, uploads the zip, and pushes `rel/integration` after 
 `sync-main.yml` fast-forwards the fork's `main` to upstream `main` every night at 01:00
 Eastern time, before the nightly build. It never force-pushes: if `main` has diverged it fails.
 
+`branch-check.yml` (Branch check) runs LightCraft's quality gate on one branch of the fork, on GitHub's
+runner instead of the local machine, with upstream's own setup (`craft-common-actions` `gate-setup`). It
+only runs when started, never on a push and never upstream:
+
+```
+gh workflow run branch-check.yml -R bd78/lightcraft --ref nightly -f branch=<branch> -f mode=quick
+```
+
+`mode=quick` runs `cargo xtask ci --quick` (the changes since `main`), `mode=full` the whole
+`cargo xtask ci`, the same gate as upstream's PR CI. The run is titled `Branch check <branch> (<mode>)`.
+
 ## Branches in the nightly build
 
 In merge order (`FEATURE_BRANCHES`), after `upstream/main`.

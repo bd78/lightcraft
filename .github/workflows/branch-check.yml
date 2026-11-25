@@ -1,0 +1,81 @@
+name: Branch check
+
+# Runs LightCraft's quality gate on one of the fork's branches, on GitHub's runner instead of the
+# local machine. Lives on `nightly` (the fork's default branch), so it is started by hand or by an
+# agent after a push, never by the push itself, and never runs upstream:
+#   gh workflow run branch-check.yml -R bd78/lightcraft --ref nightly -f branch=<branch> -f mode=quick
+# Setup is upstream's own (craft-common-actions gate-setup, same inputs as storytold/lightcraft's
+# ci.yml), so a green full run here is the same gate upstream's PR CI runs.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch of bd78/lightcraft to check"
+        required: true
+        type: string
+      mode:
+        description: "quick = cargo xtask ci --quick (changes since origin/main); full = cargo xtask ci"
+        required: true
+        type: choice
+        options: [quick, full]
+        default: quick
+
+run-name: Branch check ${{ inputs.branch }} (${{ inputs.mode }})
+
+permissions:
+  contents: read
+
+# A newer check of the same branch replaces the older one.
+concurrency:
+  group: branch-check-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+    steps:
+      # Full history: --quick diffs against the merge base with origin/main (the upstream mirror).
+      - name: Checkout ${{ inputs.branch }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checked-out commit
+        run: |
+          echo "Checking ${{ inputs.branch }} at $(git rev-parse HEAD) (${{ inputs.mode }})"
+          echo "Branch \`${{ inputs.branch }}\` at \`$(git rev-parse HEAD)\`, mode **${{ inputs.mode }}**" >> "$GITHUB_STEP_SUMMARY"
+
+      # Same setup and inputs as storytold/lightcraft's ci.yml (through craft-common-actions gate.yml).
+      # All dispatches run on `nightly`, so they share one dependency cache, saved after each run.
+      - name: Setup
+        uses: storytold/craft-common-actions/actions/gate-setup@315eb1972c857c839c3abb3d9288bfd40d21b7da
+        with:
+          craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          require-craft-fonts: "true"
+          dev-debug: line-tables-only
+          packages: >-
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
+            libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+            libgl1-mesa-dev libdbus-1-dev
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          tools: ""
+          cache-job: branch-check
+          cache-save: "true"
+          writes: "true"
+
+      - name: cargo xtask ci (${{ inputs.mode }})
+        run: |
+          if [ "${{ inputs.mode }}" = full ]; then cargo xtask ci; else cargo xtask ci --quick; fi
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f target/ci/summary.md ]; then cat target/ci/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
