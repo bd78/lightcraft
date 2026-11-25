@@ -246,15 +246,37 @@ impl Meta {
     /// the maker's; for a photo added before it was kept, the first word is.
     pub fn camera_name(&self) -> Option<String> {
         let (camera, make) = (self.camera.trim(), self.make.trim());
-        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(' ')));
+        let after_make = camera.strip_prefix(make).filter(|rest| !make.is_empty() && (rest.is_empty() || rest.starts_with(char::is_whitespace)));
         let (maker, model) = match after_make {
             Some(model) => (make, model),
-            None => camera.split_once(' ').unwrap_or((camera, "")),
+            None => camera.split_once(char::is_whitespace).unwrap_or((camera, "")),
         };
         let maker: Vec<&str> = maker.split_whitespace().filter(|w| !company_word(w)).collect();
         let said: Vec<String> = maker.iter().map(|w| word_key(w)).collect();
-        let model = model.split_whitespace().skip_while(|w| company_word(w) || said.contains(&word_key(w)));
-        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.map(str::to_string)).collect();
+        let model: Vec<&str> = if after_make.is_some() {
+            // drop the end of the make said again, with or without its company words ("NIKON", "ACME CAMERA SYSTEMS",
+            // or "KODAK" after "EASTMAN KODAK COMPANY"), then the make's own company words ("NIKON CORPORATION"); any
+            // other word, a company word included, is the model's; an end of company words alone is not the make
+            // ("ACME COMPUTER Computer 1000")
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let keys: Vec<String> = model.iter().map(|w| word_key(w)).collect();
+            let named = |end: &&[String]| keys.starts_with(end) && end.iter().any(|w| !company_word(w));
+            let longest = |of: &[String]| (0..of.len()).filter_map(|i| of.get(i..)).find(named).map_or(0, <[String]>::len);
+            let full: Vec<String> = make.split_whitespace().map(word_key).collect();
+            let run = longest(&full).max(longest(&said));
+            let own: Vec<String> = make.split_whitespace().filter(|w| company_word(w)).map(word_key).collect();
+            let rest = model.get(run..).unwrap_or_default();
+            rest.iter().skip_while(|w| run > 0 && own.contains(&word_key(w))).copied().collect()
+        } else {
+            // the maker taken from the first word: drop the company words it left behind when they hold a legal form
+            // ("CASIO COMPUTER CO.,LTD.", with the maker said again among them), otherwise only the maker said again
+            // ("ACME Computer 1000" keeps Computer)
+            let model: Vec<&str> = model.split_whitespace().collect();
+            let run: Vec<&str> = model.iter().copied().take_while(|w| said.contains(&word_key(w)) || company_word(w)).collect();
+            let drop = if run.iter().any(|w| legal_form(w)) { run.len() } else { run.iter().take_while(|w| said.contains(&word_key(w))).count() };
+            model.get(drop..).unwrap_or_default().to_vec()
+        };
+        let words: Vec<String> = maker.iter().map(|w| maker_word(w)).chain(model.into_iter().map(str::to_string)).collect();
         (!words.is_empty()).then(|| words.join(" "))
     }
 }
@@ -267,9 +289,17 @@ fn word_key(w: &str) -> String {
 
 /// Is `w` a word of a maker's company name ("IMAGING CORP.", "COMPANY, LTD.", "CAMERA AG"), or punctuation alone?
 fn company_word(w: &str) -> bool {
-    const WORDS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag imaging camera optical electronics";
+    const DESCRIPTIVE: &str = "imaging camera computer optical electronics";
     let key = word_key(w);
-    key.is_empty() || WORDS.split(' ').any(|c| c == key)
+    key.is_empty() || legal_form(w) || DESCRIPTIVE.split(' ').any(|c| c == key)
+}
+
+/// Is `w` the legal form of a company ("CORP.", "CO.,LTD.", "AG")? Unlike "CAMERA" or "COMPUTER", no model starts
+/// with one.
+fn legal_form(w: &str) -> bool {
+    const FORMS: &str = "corporation corp company co ltd coltd limited inc llc gmbh ag";
+    let key = word_key(w);
+    FORMS.split(' ').any(|c| c == key)
 }
 
 /// A word of a maker's name as a name: one in capitals of more than three letters ("OLYMPUS") or in lower case
@@ -895,5 +925,30 @@ mod camera_name_tests {
         assert_eq!(name("OM Digital Solutions", "OM Digital Solutions OM-1").as_deref(), Some("OM Digital Solutions OM-1"));
         assert_eq!(name("", "ILCE-7M4").as_deref(), Some("ILCE-7M4"));
         assert_eq!(name("", " "), None, "no camera");
+        // a maker whose company words follow its name ("COMPUTER CO.,LTD."), known or taken from the first word
+        for make in ["CASIO COMPUTER CO.,LTD.", ""] {
+            assert_eq!(name(make, "CASIO COMPUTER CO.,LTD. EX-Z1050").as_deref(), Some("Casio EX-Z1050"), "make {make:?}");
+        }
+        // with the maker known, a company word that starts the model is the model's
+        assert_eq!(name("ACME", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // but the maker said again in full, company words and all, is dropped
+        let repeated = "NIKON CORPORATION NIKON CORPORATION Z 8";
+        assert_eq!(name("NIKON CORPORATION", repeated).as_deref(), Some("Nikon Z 8"));
+        // a model word that is only some word of the maker, or a company word the make never had, is the model's
+        let om = "OM Digital Solutions Digital 1000";
+        assert_eq!(name("OM Digital Solutions", om).as_deref(), Some("OM Digital Solutions Digital 1000"));
+        assert_eq!(name("ACME", "ACME ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("ACME COMPUTER", "ACME COMPUTER Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        // with the maker taken from the first word, a company word with no legal form after it is the model's, and
+        // the first word ends at any space
+        assert_eq!(name("", "ACME Computer 1000").as_deref(), Some("Acme Computer 1000"));
+        assert_eq!(name("", "CANON\tALPHA R5").as_deref(), Some("Canon ALPHA R5"));
+        // the end of the maker said again is dropped ("EASTMAN KODAK" then "KODAK")
+        let kodak = "EASTMAN KODAK COMPANY KODAK EASYSHARE C875 ZOOM DIGITAL CAMERA";
+        let shown = name("EASTMAN KODAK COMPANY", kodak);
+        assert_eq!(shown.as_deref(), Some("Eastman Kodak EASYSHARE C875 ZOOM DIGITAL CAMERA"));
+        // the make said again with a company word inside it is dropped whole
+        let systems = "ACME CAMERA SYSTEMS ACME CAMERA SYSTEMS 1000";
+        assert_eq!(name("ACME CAMERA SYSTEMS", systems).as_deref(), Some("Acme Systems 1000"));
     }
 }
